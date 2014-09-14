@@ -9,6 +9,7 @@ require "open-uri"
 require "openid"
 require "openid/extensions/ax"
 require "openid/store/filesystem"
+require "oauth2"
 require "pinion"
 require "pinion/sinatra_helpers"
 require "redcarpet"
@@ -46,6 +47,11 @@ UNAUTHENTICATED_ROUTES = ["/signin", "/signout", "/inspire", "/statusz", "/api/"
 # configurable.
 UNAUTHENTICATED_PREVIEW_ROUTES = ["/commits/", "/stats"]
 
+unless OAUTH2_PROVIDERS.empty?
+  OAUTH2_PROVIDERS.each do |provider|
+    provider[:client] =  OAuth2::Client.new(provider[:client_id], provider[:client_secret], :site => provider[:site], :authorize_url => provider[:authorize_url], :token_url => provider[:token_url])
+  end
+end
 
 # OPENID_PROVIDERS is a string env variable. It's a comma-separated list of OpenID providers.
 OPENID_PROVIDERS_ARRAY = OPENID_PROVIDERS.split(",")
@@ -106,7 +112,7 @@ class BarkeepServer < Sinatra::Base
   # Session hijacking protection breaks Chrome sessions and offers little protection anyway
   set :protection, except: :session_hijacking
 
-  raise "You must have an OpenID provider defined in OPENID_PROVIDERS." if OPENID_PROVIDERS.empty?
+  raise "You must have an OpenID or OAuth2 provider defined in OPENID_PROVIDERS or OAUTH2_PROVIDERS, respectively." if OPENID_PROVIDERS.empty? && OAUTH2_PROVIDERS.empty?
 
   configure :development do
     STDOUT.sync = true # Flush any output right away when running via Foreman.
@@ -172,6 +178,26 @@ class BarkeepServer < Sinatra::Base
         end
       end
     end
+
+    def try_start_session(name, email)
+      if defined?(PERMITTED_USERS) && !PERMITTED_USERS.empty?
+        unless PERMITTED_USERS.split(",").map(&:strip).include?(email)
+          halt 401, "Your email #{email} is not authorized to login to Barkeep."
+        end
+      end
+
+      start_session(name, email)
+    end
+
+    def start_session(name, email)
+      session[:email] = email
+      unless User.find(:email => email)
+        # If there are no admin users yet, make the first user to log in the first admin.
+        permission = User.find(:permission => "admin").nil? ? "admin" : "normal"
+        User.new(:email => email, :name => name, :permission => permission).save
+      end
+      redirect session[:login_started_url] || "/"
+    end
   end
 
   before do
@@ -200,9 +226,7 @@ class BarkeepServer < Sinatra::Base
 
       # Save url to return to it after login completes.
       session[:login_started_url] = request.url
-      redirect(OPENID_PROVIDERS_ARRAY.size == 1 ?
-         get_openid_login_redirect(OPENID_PROVIDERS_ARRAY.first) :
-        "/signin/select_openid_provider")
+      redirect get_signin_redirect()
     end
   end
 
@@ -213,16 +237,14 @@ class BarkeepServer < Sinatra::Base
   get "/signin" do
     session.clear
     session[:login_started_url] = request.referrer
-    redirect(OPENID_PROVIDERS_ARRAY.size == 1 ?
-       get_openid_login_redirect(OPENID_PROVIDERS_ARRAY.first) :
-      "/signin/select_openid_provider")
+    redirect get_signin_redirect()
   end
 
-  get "/signin/select_openid_provider" do
-    erb :select_openid_provider, :locals => { :openid_providers => OPENID_PROVIDERS_ARRAY }
+  get "/signin/select_signid_provider" do
+    erb :select_signid_provider, :locals => { :openid_providers => OPENID_PROVIDERS_ARRAY, :oauth2_providers => OAUTH2_PROVIDERS }
   end
 
-  # Users navigate to here from select_openid_provider.
+  # Users navigate to here from select_signid_provider.
   # - provider_id: an integer indicating which provider from OPENID_PROVIDERS_ARRAY to use for authentication.
   get "/signin/signin_using_openid_provider" do
     provider = OPENID_PROVIDERS_ARRAY[params[:provider_id].to_i]
@@ -243,18 +265,44 @@ class BarkeepServer < Sinatra::Base
     when OpenID::Consumer::SUCCESS
       ax_resp = OpenID::AX::FetchResponse.from_success_response(openid_response)
       email = ax_resp["http://axschema.org/contact/email"][0]
-      if defined?(PERMITTED_USERS) && !PERMITTED_USERS.empty?
-        unless PERMITTED_USERS.split(",").map(&:strip).include?(email)
-          halt 401, "Your email #{email} is not authorized to login to Barkeep."
-        end
-      end
-      session[:email] = email
-      unless User.find(:email => email)
-        # If there are no admin users yet, make the first user to log in the first admin.
-        permission = User.find(:permission => "admin").nil? ? "admin" : "normal"
-        User.new(:email => email, :name => email, :permission => permission).save
-      end
-      redirect session[:login_started_url] || "/"
+      try_start_session(email, email)
+    end
+  end
+
+  # Allow folks to select one provider
+  get "/signin/signin_using_oauth2_provider" do
+    provider_id = params[:provider_id].to_i
+    provider = OAUTH2_PROVIDERS[provider_id]
+    halt 400, "OAuth2 provider not found" unless provider
+
+    host = "#{request.scheme}://#{request.host_with_port}"
+    redirect provider[:client].auth_code.authorize_url(:redirect_uri => "#{host}/signin/oauth2callback/#{provider_id}", :scope => provider[:scope])
+  end
+
+  # Handle login from oauth2
+  get "/signin/oauth2callback/:provider_id" do
+    if params[:error]
+      halt 401, params[:error]
+    else
+      provider_id = params[:provider_id].to_i
+      provider = OAUTH2_PROVIDERS[provider_id]
+      halt 401, "No OAuth2 provider specified" unless provider
+
+      # fetch the oauth2 token
+      host = "#{request.scheme}://#{request.host_with_port}"
+      token = provider[:client].auth_code.get_token(params[:code], :redirect_uri => "#{host}/signin/oauth2callback/#{provider_id}")
+
+      # optional accept header
+      headers = {}
+      headers['Accept'] = provider[:profile_accept_header] if provider[:profile_accept_header]
+
+      # fetch the user profile
+      result = token.get(provider[:profile_url], :headers => headers)
+      info = JSON.parse(result.body)
+      halt 401, "Profile information invalid" unless info
+      halt 401, "No verified email" unless info["verified_email"]
+
+      try_start_session(info["name"], info["verified_email"])
     end
   end
 
@@ -560,6 +608,16 @@ class BarkeepServer < Sinatra::Base
   private
 
   def logged_in?() current_user && !current_user.demo? end
+
+  def get_signin_redirect()
+    if OPENID_PROVIDERS_ARRAY.size == 1 and OAUTH2_PROVIDERS.empty?
+      get_openid_login_redirect(OPENID_PROVIDERS_ARRAY.first)
+    elsif OPENID_PROVIDERS_ARRAY.empty? and OAUTH2_PROVIDERS.size == 1
+      "/signin/signin_using_oauth2_provider?provider_id=0"
+    else
+      "/signin/select_signin_provider"
+    end
+  end
 
   # Construct redirect url to google openid.
   def get_openid_login_redirect(openid_provider_url)
