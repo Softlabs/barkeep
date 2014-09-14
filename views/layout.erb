@@ -67,6 +67,7 @@
             <% end %>
             <a href="/settings" class="<%= current_page_if_url("settings") %>">Settings</a> |
           <% end %>
+          <a href="http://redmine.lc-chronicles.com/">Redmine</a> |
           <% if current_user.nil? || current_user.demo? %>
             <a href="/signin">Sign in</a>
           <% else %>
