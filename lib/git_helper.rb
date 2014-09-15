@@ -56,6 +56,6 @@ class GitHelper
   # pathological case. Also, we could explore better heuristics here (e.g. look at newlines or compare the
   # ratio of printable/non-printable characters like git does).
   def self.blob_binary?(blob)
-    blob && !blob.data.empty? && blob.data.index("\0")
+    blob && !blob.data.empty? && (blob.data.index("\0") || blob.data.index("\xFF") || blob.data.index("\xEF"))
   end
 end
