@@ -179,22 +179,22 @@ class BarkeepServer < Sinatra::Base
       end
     end
 
-    def try_start_session(name, email)
+    def try_start_session(name, login)
       if defined?(PERMITTED_USERS) && !PERMITTED_USERS.empty?
-        unless PERMITTED_USERS.split(",").map(&:strip).include?(email)
-          halt 401, "Your email #{email} is not authorized to login to Barkeep."
+        unless PERMITTED_USERS.split(",").map(&:strip).include?(login)
+          halt 401, "Your email #{login} is not authorized to login to Barkeep."
         end
       end
 
-      start_session(name, email)
+      start_session(name, login)
     end
 
-    def start_session(name, email)
-      session[:email] = email
-      unless User.find(:email => email)
+    def start_session(name, login)
+      session[:login] = login
+      unless User.find(:login => login)
         # If there are no admin users yet, make the first user to log in the first admin.
         permission = User.find(:permission => "admin").nil? ? "admin" : "normal"
-        User.new(:email => email, :name => name, :permission => permission).save
+        User.new(:email => login, :login => login, :name => name, :permission => permission).save
       end
       redirect session[:login_started_url] || "/"
     end
@@ -202,7 +202,7 @@ class BarkeepServer < Sinatra::Base
 
   before do
     # When running in read-only demo mode, if the user is not logged in, treat them as a demo user.
-    self.current_user ||= User.find(:email => session[:email])
+    self.current_user ||= User.find(:login => session[:login])
     if current_user.nil? && (defined?(ENABLE_READONLY_DEMO_MODE) && ENABLE_READONLY_DEMO_MODE)
       self.current_user = User.first(:permission => "demo")
       current_user.rack_session = session
@@ -317,6 +317,9 @@ class BarkeepServer < Sinatra::Base
     preference = params[:preference]
     if preference == "displayname"
       current_user.name = params[:value]
+      current_user.save
+    elsif preference == "email"
+      current_user.email = params[:value]
       current_user.save
     elsif ["line_length", "default_to_side_by_side"].include? preference
       current_user.send :"#{preference}=", params[:value]
