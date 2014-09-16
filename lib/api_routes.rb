@@ -77,6 +77,22 @@ class BarkeepServer < Sinatra::Base
     commits.to_json
   end
 
+  # custom to fetch all since a specific date
+  get "/api/commits/:repo_name" do
+    fields = params[:fields] ? params[:fields].split(",") : nil
+    repo_name = params[:repo_name]
+
+    repo = MetaRepo.instance.get_grit_repo(repo_name)
+    api_error 404, "No Repository found" unless repo
+
+    commits = {}
+    MetaRepo.instance.commits_from_repo(repo, { :all => true }, 1000, :last).each do |grit_commit|
+      commit = MetaRepo.instance.db_commit(repo_name, grit_commit.sha)
+      commits[commit.sha] = format_commit_data(commit, repo_name, fields)
+    end
+    commits.to_json
+  end
+
   private
 
   def format_commit_data(commit, repo_name, fields)
