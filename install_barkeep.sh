@@ -31,7 +31,7 @@ gem install bundler
 rbenv rehash
 
 # Clone Barkeep
-git clone git://github.com/ooyala/barkeep.git ~/barkeep
+git clone git://github.com/softlabs/barkeep.git ~/barkeep
 cd ~/barkeep && bundle install && rbenv rehash
 
 # Configure a reverse proxy webserver (nginx) to Barkeep
