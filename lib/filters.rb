@@ -29,14 +29,13 @@ end
 JIRA_WHITELIST = Set.new(["BL", "PROD", "PL", "APP", "OCS", "BIG", "CCC", "CST", "DS", "IOS", "JIRA", "NH",
     "PSE", "OTA", "TOOL", "OTS", "WEB", "MIRA", "PWS", "AUTO", "HELP"])
 StringFilter.define_filter :link_jira_issue do |str|
-#  str.gsub(/([A-Z]+)-(\d+)/) do |match|
-#    group = Regexp.last_match(1)
-#    next match unless JIRA_WHITELIST.include?(group)
-#    number = Regexp.last_match(2)
-#    "<a href='https://jira.corp.ooyala.com/browse/#{group}-#{number}' target='_blank'>" +
-#        "#{match}</a>"
-#  end
-  str
+  str.gsub(/([A-Z]+)-(\d+)/) do |match|
+    group = Regexp.last_match(1)
+    next match unless JIRA_WHITELIST.include?(group)
+    number = Regexp.last_match(2)
+    "<a href='https://jira.corp.ooyala.com/browse/#{group}-#{number}' target='_blank'>" +
+        "#{match}</a>"
+  end
 end
 
 StringFilter.define_filter(:emoji) { |str| Emoji.emojify(str) }
@@ -50,16 +49,14 @@ end
 
 # See https://github.com/blog/831-issues-2-0-the-next-generation
 # for the list of issue linking synonyms.
-StringFilter.define_filter :link_github_issue do |str, username, repo|
+StringFilter.define_filter :link_github_issue do |str, github_username, github_repo|
   str.gsub(/(#|gh-)(\d+)/i) do
     prefix = Regexp.last_match(1)
     number = Regexp.last_match(2)
-    "<a href='http://redmine.lc-chronicles.com/issues/#{number}' target='_blank'>" +
+    "<a href='https://github.com/#{github_username}/#{github_repo}/issues/#{number}' target='_blank'>" +
         "#{prefix}#{number}</a>"
   end
 end
-
-
 
 StringFilter.define_filter :truncate_front do |str, max_length|
   abbreviator = "..."
